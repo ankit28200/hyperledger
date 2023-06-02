@@ -1,0 +1,147 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hyperledger/fabric-contract-api-go/contractapi"
+)
+
+type Policy struct {
+	PolicyID      string    `json:"policyID"`
+	SumAssured    int       `json:"sumAssured"`
+	Name          string    `json:"name"`
+	DateOfBirth   time.Time `json:"dateOfBirth"`
+	Gender        string    `json:"gender"`
+	StartDate     time.Time `json:"startDate"`
+	EndDate       time.Time `json:"endDate"`
+	Coverages     []string  `json:"coverages"`
+	Benefits      []string  `json:"benefits"`
+	Exclusions    []string  `json:"exclusions"`
+	TotalClaimed  int       `json:"totalClaimed"`
+	IsClaimed     bool      `json:"isClaimed"`
+}
+
+type SmartContract struct {
+	contractapi.Contract
+}
+
+func (sc *SmartContract) CreatePolicy(ctx contractapi.TransactionContextInterface, policyID string, sumAssured int, name string, dob string, gender string, startDate string, endDate string, coverages []string, benefits []string, exclusions []string) error {
+	exists, err := sc.PolicyExists(ctx, policyID)
+	if err != nil {
+		return fmt.Errorf("failed to check if policy exists: %v", err)
+	}
+	if exists {
+		return fmt.Errorf("the policy with ID %s already exists", policyID)
+	}
+
+	dateOfBirth, err := time.Parse("2006-01-02", dob)
+	if err != nil {
+		return fmt.Errorf("failed to parse date of birth: %v", err)
+	}
+
+	startDt, err := time.Parse("2006-01-02", startDate)
+	if err != nil {
+		return fmt.Errorf("failed to parse start date: %v", err)
+	}
+
+	endDt, err := time.Parse("2006-01-02", endDate)
+	if err != nil {
+		return fmt.Errorf("failed to parse end date: %v", err)
+	}
+
+	policy := Policy{
+		PolicyID:      policyID,
+		SumAssured:    sumAssured,
+		Name:          name,
+		DateOfBirth:   dateOfBirth,
+		Gender:        gender,
+		StartDate:     startDt,
+		EndDate:       endDt,
+		Coverages:     coverages,
+		Benefits:      benefits,
+		Exclusions:    exclusions,
+		TotalClaimed:  0,
+		IsClaimed:     false,
+	}
+
+	policyBytes, err := json.Marshal(policy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal policy JSON: %v", err)
+	}
+
+	err = ctx.GetStub().PutState(policyID, policyBytes)
+	if err != nil {
+		return fmt.Errorf("failed to put policy state: %v", err)
+	}
+
+	return nil
+}
+
+func (sc *SmartContract) GetPolicy(ctx contractapi.TransactionContextInterface, policyID string) (*Policy, error) {
+	policyBytes, err := ctx.GetStub().GetState(policyID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read policy state: %v", err)
+	}
+	if policyBytes == nil {
+		return nil, fmt.Errorf("the policy with ID %s does not exist", policyID)
+	}
+
+	var policy Policy
+	err = json.Unmarshal(policyBytes, &policy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal policy JSON: %v", err)
+	}
+
+	return &policy, nil
+}
+
+func (sc *SmartContract) SubmitClaim(ctx contractapi.TransactionContextInterface, policyID string, amount int) error {
+	policy, err := sc.GetPolicy(ctx, policyID)
+	if err != nil {
+		return fmt.Errorf("failed to get policy: %v", err)
+	}
+
+	if policy.IsClaimed {
+		return fmt.Errorf("the policy with ID %s has already been claimed", policyID)
+	}
+
+	if amount > policy.SumAssured-policy.TotalClaimed {
+		return fmt.Errorf("the claimed amount exceeds the remaining sum assured for policy %s", policyID)
+	}
+
+	policy.TotalClaimed += amount
+
+	policyBytes, err := json.Marshal(policy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal policy JSON: %v", err)
+	}
+
+	err = ctx.GetStub().PutState(policyID, policyBytes)
+	if err != nil {
+		return fmt.Errorf("failed to put policy state: %v", err)
+	}
+
+	return nil
+}
+
+func (sc *SmartContract) PolicyExists(ctx contractapi.TransactionContextInterface, policyID string) (bool, error) {
+	policyBytes, err := ctx.GetStub().GetState(policyID)
+	if err != nil {
+		return false, fmt.Errorf("failed to read policy state: %v", err)
+	}
+	return policyBytes != nil, nil
+}
+
+func main() {
+	chaincode, err := contractapi.NewChaincode(&SmartContract{})
+	if err != nil {
+		fmt.Printf("Error creating health insurance policy chaincode: %v\n", err)
+		return
+	}
+
+	if err := chaincode.Start(); err != nil {
+		fmt.Printf("Error starting health insurance policy chaincode: %v\n", err)
+	}
+}

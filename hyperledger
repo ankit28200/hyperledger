@@ -97,34 +97,44 @@ func (sc *SmartContract) GetPolicy(ctx contractapi.TransactionContextInterface, 
 	return &policy, nil
 }
 
-func (sc *SmartContract) SubmitClaim(ctx contractapi.TransactionContextInterface, policyID string, amount int) error {
-	policy, err := sc.GetPolicy(ctx, policyID)
+func (s *SmartContract) ProcessClaim(ctx contractapi.TransactionContextInterface, policyID string, claimAmount float64, ailment string) error {
+	policy, err := s.GetPolicy(ctx, policyID)
 	if err != nil {
 		return fmt.Errorf("failed to get policy: %v", err)
 	}
 
-	if policy.IsClaimed {
-		return fmt.Errorf("the policy with ID %s has already been claimed", policyID)
+	if policy.SumAssured < claimAmount {
+		return fmt.Errorf("claim amount exceeds sum assured")
 	}
 
-	if amount > policy.SumAssured-policy.TotalClaimed {
-		return fmt.Errorf("the claimed amount exceeds the remaining sum assured for policy %s", policyID)
+	// Check if the provided ailment is covered by the policy
+	isCovered := false
+	for _, coverage := range policy.Coverages {
+		if coverage == ailment {
+			isCovered = true
+			break
+		}
 	}
 
-	policy.TotalClaimed += amount
+	if !isCovered {
+		return fmt.Errorf("policy does not cover the specified ailment")
+	}
+
+	policy.SumAssured -= claimAmount
 
 	policyBytes, err := json.Marshal(policy)
 	if err != nil {
-		return fmt.Errorf("failed to marshal policy JSON: %v", err)
+		return fmt.Errorf("failed to marshal policy: %v", err)
 	}
 
 	err = ctx.GetStub().PutState(policyID, policyBytes)
 	if err != nil {
-		return fmt.Errorf("failed to put policy state: %v", err)
+		return fmt.Errorf("failed to update policy on the ledger: %v", err)
 	}
 
 	return nil
 }
+
 
 func (sc *SmartContract) PolicyExists(ctx contractapi.TransactionContextInterface, policyID string) (bool, error) {
 	policyBytes, err := ctx.GetStub().GetState(policyID)
